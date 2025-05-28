@@ -13,8 +13,10 @@ pipeline {
         stage("Login to EKS") {
             steps {
                 script {
-                    withCredentials([string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
-                                     string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')]) {
+                    withCredentials([
+                        string(credentialsId: 'access-key', variable: 'AWS_ACCESS_KEY'),
+                        string(credentialsId: 'secret-key', variable: 'AWS_SECRET_KEY')
+                    ]) {
                         sh "aws eks --region us-east-1 update-kubeconfig --name ${params.CLUSTER_NAME}"
                     }
                 }
@@ -25,19 +27,24 @@ pipeline {
             steps {
                 script {
                     sh """
-                    helm repo add stable https://charts.helm.sh/stable || true
                     helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
-                    # Check if namespace 'prometheus' exists
-                    if kubectl get namespace prometheus > /dev/null 2>&1; then
-                        # If namespace exists, upgrade the Helm release
-                        helm upgrade stable prometheus-community/kube-prometheus-stack -n prometheus
-                    else
-                        # If namespace does not exist, create it and install Helm release
+                    helm repo update
+
+                    # Ensure 'prometheus' namespace exists
+                    if ! kubectl get namespace prometheus > /dev/null 2>&1; then
                         kubectl create namespace prometheus
-                        helm install stable prometheus-community/kube-prometheus-stack -n prometheus
                     fi
-                    kubectl patch svc stable-kube-prometheus-sta-prometheus -n prometheus -p '{"spec": {"type": "LoadBalancer"}}'
-                    kubectl patch svc stable-grafana -n prometheus -p '{"spec": {"type": "LoadBalancer"}}'
+
+                    # Install or upgrade Prometheus stack
+                    if helm list -n prometheus | grep kube-prometheus > /dev/null 2>&1; then
+                        helm upgrade kube-prometheus prometheus-community/kube-prometheus-stack -n prometheus
+                    else
+                        helm install kube-prometheus prometheus-community/kube-prometheus-stack -n prometheus
+                    fi
+
+                    # Patch Prometheus and Grafana services to LoadBalancer type
+                    kubectl patch svc kube-prometheus-kube-prometheus-prometheus -n prometheus -p '{"spec": {"type": "LoadBalancer"}}' || true
+                    kubectl patch svc kube-prometheus-grafana -n prometheus -p '{"spec": {"type": "LoadBalancer"}}' || true
                     """
                 }
             }
@@ -50,11 +57,12 @@ pipeline {
                     # Install ArgoCD
                     kubectl create namespace argocd || true
                     kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-                    kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+
+                    # Patch ArgoCD server service to LoadBalancer type
+                    kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}' || true
                     """
                 }
             }
         }
-		
     }
 }
